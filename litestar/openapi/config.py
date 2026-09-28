@@ -90,6 +90,16 @@ class OpenAPIConfig:
     """
     operation_id_creator: OperationIDCreator = default_operation_id_creator
     """A callable that generates unique operation ids"""
+    audiences: Sequence[str] | None = None
+    """A sequence of audience identifiers for which separate, filtered OpenAPI schemas are generated.
+
+    For each audience, a schema containing only the operations of route handlers tagged with that
+    audience (see the ``audience`` kwarg of route handlers, controllers and routers) is served at
+    ``{path}/{audience}/openapi.json``. Components (schemas, security schemes, examples, etc.) that
+    are not referenced by any of the included operations are pruned from the audience's schema.
+
+    The default schema served under ``path`` is unaffected and always contains all operations.
+    """
     path: str = "/schema"
     """Base path for the OpenAPI documentation endpoints.
 

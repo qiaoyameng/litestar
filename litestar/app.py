@@ -212,6 +212,7 @@ class Litestar(Router):
         state: State | None = None,
         stores: StoreRegistry | dict[str, Store] | None = None,
         tags: Sequence[str] | None = None,
+        audience: str | Sequence[str] | None = None,
         template_config: TemplateConfigType | None = None,
         type_decoders: TypeDecodersSequence | None = None,
         type_encoders: TypeEncodersMap | None = None,
@@ -311,6 +312,9 @@ class Litestar(Router):
                 :class:`StoreRegistry <.stores.registry.StoreRegistry>`, this instance will be used directly.
             tags: A sequence of string tags that will be appended to the schema of all route handlers under the
                 application.
+            audience: An audience identifier or sequence of audience identifiers, marking all route handlers under
+                the application as belonging to the given audience(s). Used to generate audience-filtered OpenAPI
+                schemas, see :attr:`OpenAPIConfig.audiences <.openapi.config.OpenAPIConfig.audiences>`.
             template_config: An instance of :class:`TemplateConfig <.template.TemplateConfig>`
             type_decoders: A sequence of tuples, each composed of a predicate testing for type identity and a msgspec
                 hook for deserialization.
@@ -372,6 +376,7 @@ class Litestar(Router):
             state=state or State(),
             stores=stores,
             tags=list(tags or []),
+            audience=[audience] if isinstance(audience, str) else list(audience or []),
             template_config=template_config,
             type_encoders=type_encoders,
             type_decoders=type_decoders,
@@ -467,6 +472,7 @@ class Litestar(Router):
             signature_namespace=config.signature_namespace,
             signature_types=config.signature_types,
             tags=config.tags,
+            audience=config.audience,
             type_encoders=config.type_encoders,
             type_decoders=config.type_decoders,
             include_in_schema=config.include_in_schema,

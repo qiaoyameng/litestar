@@ -73,6 +73,7 @@ class Controller:
         "signature_namespace",
         "signature_types",
         "tags",
+        "audience",
         "type_decoders",
         "type_encoders",
         "websocket_class",
@@ -151,6 +152,13 @@ class Controller:
     """
     tags: Sequence[str] | None
     """A sequence of string tags that will be appended to the schema of all route handlers under the controller."""
+    audience: str | Sequence[str] | None
+    """An audience identifier or sequence of audience identifiers, marking all route handlers under the controller
+    as belonging to the given audience(s).
+
+    Used to generate audience-filtered OpenAPI schemas, see
+    :attr:`OpenAPIConfig.audiences <.openapi.config.OpenAPIConfig.audiences>`.
+    """
     security: Sequence[SecurityRequirement] | None
     """A sequence of dictionaries that to the schema of all route handlers under the controller."""
     signature_namespace: dict[str, Any]
@@ -232,6 +240,7 @@ class Controller:
             signature_types=self.signature_types,
             signature_namespace=self.signature_namespace,
             tags=self.tags,
+            audience=self.audience,
             type_encoders=self.type_encoders,
             type_decoders=self.type_decoders,
             websocket_class=self.websocket_class,

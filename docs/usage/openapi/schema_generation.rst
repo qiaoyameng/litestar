@@ -333,3 +333,47 @@ Once installed, you can turn on example generation via the OpenAPI config:
 
 .. literalinclude:: /examples/openapi/customize_pydantic_model_name.py
     :language: python
+
+
+Audience-filtered schemas
+-------------------------
+
+If an application serves different audiences - for example, internal consumers and external partners -
+you can generate a separate, filtered OpenAPI schema for each audience. Tag route handlers with an
+``audience`` and list the audiences in the
+:attr:`OpenAPIConfig.audiences <.openapi.config.OpenAPIConfig.audiences>`:
+
+.. code-block:: python
+
+    from litestar import Litestar, get
+    from litestar.openapi import OpenAPIConfig
+
+
+    @get("/internal", audience="internal")
+    def internal_handler() -> None: ...
+
+
+    @get("/partner", audience="partner")
+    def partner_handler() -> None: ...
+
+
+    app = Litestar(
+        route_handlers=[internal_handler, partner_handler],
+        openapi_config=OpenAPIConfig(
+            title="My API",
+            version="1.0.0",
+            audiences=["internal", "partner"],
+        ),
+    )
+
+For each configured audience, a schema containing only the operations tagged with that audience is
+served at ``{path}/{audience}/openapi.json`` (e.g. ``/schema/internal/openapi.json``). Components
+(schemas, security schemes, examples, etc.) that are not referenced by any of the included operations
+are pruned from the audience's schema, so components exclusive to excluded operations do not leak into
+it. Route handlers without an ``audience`` are excluded from audience schemas.
+
+The ``audience`` is additive and can also be set on controllers, routers and the application itself,
+in which case it applies to all route handlers below them, similar to ``tags``.
+
+The default schema served under the configured ``path`` is unaffected and always contains all
+operations and components.

@@ -18,15 +18,23 @@ if TYPE_CHECKING:
     from litestar.handlers.http_handlers import HTTPRouteHandler
     from litestar.routes import HTTPRoute
 
-__all__ = ("create_path_item_for_route", "merge_path_item_operations")
+__all__ = ("create_path_item_for_route", "merge_path_item_operations", "path_item_has_operations")
+
+_OPERATION_ATTRIBUTES = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
+
+
+def path_item_has_operations(path_item: PathItem) -> bool:
+    """Check if a path item has any operations defined."""
+    return any(getattr(path_item, attr) for attr in _OPERATION_ATTRIBUTES)
 
 
 class PathItemFactory:
     """Factory for creating a PathItem instance for a given route."""
 
-    def __init__(self, openapi_context: OpenAPIContext, route: HTTPRoute) -> None:
+    def __init__(self, openapi_context: OpenAPIContext, route: HTTPRoute, audience: str | None = None) -> None:
         self.context = openapi_context
         self.route = route
+        self.audience = audience
         self._path_item = PathItem()
 
     def create_path_item(self) -> PathItem:
@@ -37,6 +45,8 @@ class PathItemFactory:
         """
         for http_method, route_handler in self.route.route_handler_map.items():
             if not route_handler.include_in_schema:
+                continue
+            if self.audience is not None and self.audience not in route_handler.audience:
                 continue
 
             operation = self.create_operation_for_handler_method(route_handler, HttpMethod(http_method))
@@ -133,17 +143,20 @@ class PathItemFactory:
         return handler_description
 
 
-def create_path_item_for_route(openapi_context: OpenAPIContext, route: HTTPRoute) -> PathItem:
+def create_path_item_for_route(
+    openapi_context: OpenAPIContext, route: HTTPRoute, audience: str | None = None
+) -> PathItem:
     """Create a PathItem for the given route parsing all http_methods into Operation Models.
 
     Args:
         openapi_context: The OpenAPIContext instance.
         route: The route to create a PathItem for.
+        audience: If given, only include operations of route handlers tagged with this audience.
 
     Returns:
         A PathItem instance.
     """
-    path_item_factory = PathItemFactory(openapi_context, route)
+    path_item_factory = PathItemFactory(openapi_context, route, audience=audience)
     return path_item_factory.create_path_item()
 
 

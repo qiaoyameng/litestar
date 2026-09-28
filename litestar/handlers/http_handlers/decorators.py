@@ -101,6 +101,7 @@ def route(
     security: Sequence[SecurityRequirement] | None = None,
     summary: str | None = None,
     tags: Sequence[str] | None = None,
+    audience: str | Sequence[str] | None = None,
     type_decoders: TypeDecodersSequence | None = None,
     type_encoders: TypeEncodersMap | None = None,
     handler_class: type[HTTPRouteHandler] = HTTPRouteHandler,
@@ -173,6 +174,9 @@ def route(
         security: A sequence of dictionaries that contain information about which security scheme can be used on the endpoint.
         summary: Text used for the route's schema summary section.
         tags: A sequence of string tags that will be appended to the OpenAPI schema.
+        audience: An audience identifier or sequence of audience identifiers, marking this route handler as
+            belonging to the given audience(s). Used to generate audience-filtered OpenAPI schemas, see
+            :attr:`OpenAPIConfig.audiences <.openapi.config.OpenAPIConfig.audiences>`.
         type_decoders: A sequence of tuples, each composed of a predicate testing for type identity and a msgspec
             hook for deserialization.
         type_encoders: A mapping of types to callables that transform them into types supported for serialization.
@@ -223,6 +227,7 @@ def route(
             summary=summary,
             sync_to_thread=sync_to_thread,
             tags=tags,
+            audience=audience,
             type_decoders=type_decoders,
             type_encoders=type_encoders,
             **kwargs,
@@ -272,6 +277,7 @@ def get(
     security: Sequence[SecurityRequirement] | None = None,
     summary: str | None = None,
     tags: Sequence[str] | None = None,
+    audience: str | Sequence[str] | None = None,
     type_decoders: TypeDecodersSequence | None = None,
     type_encoders: TypeEncodersMap | None = None,
     handler_class: type[HTTPRouteHandler] = HTTPRouteHandler,
@@ -341,6 +347,9 @@ def get(
         security: A sequence of dictionaries that contain information about which security scheme can be used on the endpoint.
         summary: Text used for the route's schema summary section.
         tags: A sequence of string tags that will be appended to the OpenAPI schema.
+        audience: An audience identifier or sequence of audience identifiers, marking this route handler as
+            belonging to the given audience(s). Used to generate audience-filtered OpenAPI schemas, see
+            :attr:`OpenAPIConfig.audiences <.openapi.config.OpenAPIConfig.audiences>`.
         type_decoders: A sequence of tuples, each composed of a predicate testing for type identity and a msgspec
             hook for deserialization.
         type_encoders: A mapping of types to callables that transform them into types supported for serialization.
@@ -391,6 +400,7 @@ def get(
             summary=summary,
             sync_to_thread=sync_to_thread,
             tags=tags,
+            audience=audience,
             type_decoders=type_decoders,
             type_encoders=type_encoders,
             **kwargs,
@@ -440,6 +450,7 @@ def head(
     security: Sequence[SecurityRequirement] | None = None,
     summary: str | None = None,
     tags: Sequence[str] | None = None,
+    audience: str | Sequence[str] | None = None,
     type_decoders: TypeDecodersSequence | None = None,
     type_encoders: TypeEncodersMap | None = None,
     handler_class: type[HTTPRouteHandler] = HTTPRouteHandler,
@@ -513,6 +524,9 @@ def head(
         security: A sequence of dictionaries that contain information about which security scheme can be used on the endpoint.
         summary: Text used for the route's schema summary section.
         tags: A sequence of string tags that will be appended to the OpenAPI schema.
+        audience: An audience identifier or sequence of audience identifiers, marking this route handler as
+            belonging to the given audience(s). Used to generate audience-filtered OpenAPI schemas, see
+            :attr:`OpenAPIConfig.audiences <.openapi.config.OpenAPIConfig.audiences>`.
         type_decoders: A sequence of tuples, each composed of a predicate testing for type identity and a msgspec
             hook for deserialization.
         type_encoders: A mapping of types to callables that transform them into types supported for serialization.
@@ -563,6 +577,7 @@ def head(
             summary=summary,
             sync_to_thread=sync_to_thread,
             tags=tags,
+            audience=audience,
             type_decoders=type_decoders,
             type_encoders=type_encoders,
             **kwargs,
@@ -613,6 +628,7 @@ def patch(
     security: Sequence[SecurityRequirement] | None = None,
     summary: str | None = None,
     tags: Sequence[str] | None = None,
+    audience: str | Sequence[str] | None = None,
     type_decoders: TypeDecodersSequence | None = None,
     type_encoders: TypeEncodersMap | None = None,
     handler_class: type[HTTPRouteHandler] = HTTPRouteHandler,
@@ -684,6 +700,9 @@ def patch(
         security: A sequence of dictionaries that contain information about which security scheme can be used on the endpoint.
         summary: Text used for the route's schema summary section.
         tags: A sequence of string tags that will be appended to the OpenAPI schema.
+        audience: An audience identifier or sequence of audience identifiers, marking this route handler as
+            belonging to the given audience(s). Used to generate audience-filtered OpenAPI schemas, see
+            :attr:`OpenAPIConfig.audiences <.openapi.config.OpenAPIConfig.audiences>`.
         type_decoders: A sequence of tuples, each composed of a predicate testing for type identity and a msgspec
             hook for deserialization.
         type_encoders: A mapping of types to callables that transform them into types supported for serialization.
@@ -735,6 +754,7 @@ def patch(
             summary=summary,
             sync_to_thread=sync_to_thread,
             tags=tags,
+            audience=audience,
             type_decoders=type_decoders,
             type_encoders=type_encoders,
             **kwargs,
@@ -785,6 +805,7 @@ def post(
     security: Sequence[SecurityRequirement] | None = None,
     summary: str | None = None,
     tags: Sequence[str] | None = None,
+    audience: str | Sequence[str] | None = None,
     type_decoders: TypeDecodersSequence | None = None,
     type_encoders: TypeEncodersMap | None = None,
     handler_class: type[HTTPRouteHandler] = HTTPRouteHandler,
@@ -856,6 +877,9 @@ def post(
         security: A sequence of dictionaries that contain information about which security scheme can be used on the endpoint.
         summary: Text used for the route's schema summary section.
         tags: A sequence of string tags that will be appended to the OpenAPI schema.
+        audience: An audience identifier or sequence of audience identifiers, marking this route handler as
+            belonging to the given audience(s). Used to generate audience-filtered OpenAPI schemas, see
+            :attr:`OpenAPIConfig.audiences <.openapi.config.OpenAPIConfig.audiences>`.
         type_decoders: A sequence of tuples, each composed of a predicate testing for type identity and a msgspec
             hook for deserialization.
         type_encoders: A mapping of types to callables that transform them into types supported for serialization.
@@ -907,6 +931,7 @@ def post(
             summary=summary,
             sync_to_thread=sync_to_thread,
             tags=tags,
+            audience=audience,
             type_decoders=type_decoders,
             type_encoders=type_encoders,
             **kwargs,
@@ -957,6 +982,7 @@ def put(
     security: Sequence[SecurityRequirement] | None = None,
     summary: str | None = None,
     tags: Sequence[str] | None = None,
+    audience: str | Sequence[str] | None = None,
     type_decoders: TypeDecodersSequence | None = None,
     type_encoders: TypeEncodersMap | None = None,
     handler_class: type[HTTPRouteHandler] = HTTPRouteHandler,
@@ -1028,6 +1054,9 @@ def put(
         security: A sequence of dictionaries that contain information about which security scheme can be used on the endpoint.
         summary: Text used for the route's schema summary section.
         tags: A sequence of string tags that will be appended to the OpenAPI schema.
+        audience: An audience identifier or sequence of audience identifiers, marking this route handler as
+            belonging to the given audience(s). Used to generate audience-filtered OpenAPI schemas, see
+            :attr:`OpenAPIConfig.audiences <.openapi.config.OpenAPIConfig.audiences>`.
         type_decoders: A sequence of tuples, each composed of a predicate testing for type identity and a msgspec
             hook for deserialization.
         type_encoders: A mapping of types to callables that transform them into types supported for serialization.
@@ -1078,6 +1107,7 @@ def put(
             summary=summary,
             sync_to_thread=sync_to_thread,
             tags=tags,
+            audience=audience,
             type_decoders=type_decoders,
             type_encoders=type_encoders,
             **kwargs,
@@ -1127,6 +1157,7 @@ def delete(
     security: Sequence[SecurityRequirement] | None = None,
     summary: str | None = None,
     tags: Sequence[str] | None = None,
+    audience: str | Sequence[str] | None = None,
     type_decoders: TypeDecodersSequence | None = None,
     type_encoders: TypeEncodersMap | None = None,
     handler_class: type[HTTPRouteHandler] = HTTPRouteHandler,
@@ -1196,6 +1227,9 @@ def delete(
         security: A sequence of dictionaries that contain information about which security scheme can be used on the endpoint.
         summary: Text used for the route's schema summary section.
         tags: A sequence of string tags that will be appended to the OpenAPI schema.
+        audience: An audience identifier or sequence of audience identifiers, marking this route handler as
+            belonging to the given audience(s). Used to generate audience-filtered OpenAPI schemas, see
+            :attr:`OpenAPIConfig.audiences <.openapi.config.OpenAPIConfig.audiences>`.
         type_decoders: A sequence of tuples, each composed of a predicate testing for type identity and a msgspec
             hook for deserialization.
         type_encoders: A mapping of types to callables that transform them into types supported for serialization.
@@ -1245,6 +1279,7 @@ def delete(
             summary=summary,
             sync_to_thread=sync_to_thread,
             tags=tags,
+            audience=audience,
             type_decoders=type_decoders,
             type_encoders=type_encoders,
             **kwargs,

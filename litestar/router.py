@@ -71,6 +71,7 @@ class Router:
         "security",
         "signature_namespace",
         "tags",
+        "audience",
         "type_decoders",
         "type_encoders",
         "websocket_class",
@@ -103,6 +104,7 @@ class Router:
         signature_namespace: Mapping[str, Any] | None = None,
         signature_types: Sequence[Any] | None = None,
         tags: Sequence[str] | None = None,
+        audience: str | Sequence[str] | None = None,
         type_decoders: TypeDecodersSequence | None = None,
         type_encoders: TypeEncodersMap | None = None,
         websocket_class: type[WebSocket] | None = None,
@@ -159,6 +161,9 @@ class Router:
                 These types will be added to the signature namespace using their ``__name__`` attribute.
             tags: A sequence of string tags that will be appended to the schema of all route handlers under the
                 application.
+            audience: An audience identifier or sequence of audience identifiers, marking all route handlers under
+                the router as belonging to the given audience(s). Used to generate audience-filtered OpenAPI
+                schemas, see :attr:`OpenAPIConfig.audiences <.openapi.config.OpenAPIConfig.audiences>`.
             type_decoders: A sequence of tuples, each composed of a predicate testing for type identity and a msgspec hook for deserialization.
             type_encoders: A mapping of types to callables that transform them into types supported for serialization.
             websocket_class: A custom subclass of :class:`WebSocket <.connection.WebSocket>` to be used as the default for
@@ -193,6 +198,7 @@ class Router:
             signature_types or [], dict(signature_namespace or {})
         )
         self.tags = list(tags or [])
+        self.audience = [audience] if isinstance(audience, str) else list(audience or [])
         self.registered_route_handler_ids: set[int] = set()
         self.type_encoders = dict(type_encoders) if type_encoders is not None else {}
         self.type_decoders = list(type_decoders) if type_decoders is not None else ()

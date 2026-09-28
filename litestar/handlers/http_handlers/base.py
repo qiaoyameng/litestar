@@ -104,6 +104,7 @@ class HTTPRouteHandler(BaseRouteHandler):
         "_sync_to_thread",
         "after_request",
         "after_response",
+        "audience",
         "background",
         "before_request",
         "cache",
@@ -175,6 +176,7 @@ class HTTPRouteHandler(BaseRouteHandler):
         security: Sequence[SecurityRequirement] | None = None,
         summary: str | None = None,
         tags: Sequence[str] | None = None,
+        audience: str | Sequence[str] | None = None,
         type_decoders: TypeDecodersSequence | None = None,
         type_encoders: TypeEncodersMap | None = None,
         parameters: ParametersMap | None = None,
@@ -253,6 +255,9 @@ class HTTPRouteHandler(BaseRouteHandler):
             security: A sequence of dictionaries that contain information about which security scheme can be used on the endpoint.
             summary: Text used for the route's schema summary section.
             tags: A sequence of string tags that will be appended to the OpenAPI schema.
+            audience: An audience identifier or sequence of audience identifiers, marking this route handler as
+                belonging to the given audience(s). Used to generate audience-filtered OpenAPI schemas, see
+                :attr:`OpenAPIConfig.audiences <.openapi.config.OpenAPIConfig.audiences>`.
             type_decoders: A sequence of tuples, each composed of a predicate testing for type identity and a msgspec hook for deserialization.
             type_encoders: A mapping of types to callables that transform them into types supported for serialization.
             parameters: A mapping of :func:`Parameter <.params.Parameter>` definitions
@@ -333,6 +338,7 @@ class HTTPRouteHandler(BaseRouteHandler):
         self.response_description = response_description
         self.summary = summary
         self.tags = frozenset(tags) if tags else frozenset()
+        self.audience = frozenset([audience] if isinstance(audience, str) else audience or ())
         self.security = tuple(security) if security else ()
         self.responses = responses
         # memoized attributes, defaulted to Empty
@@ -376,6 +382,7 @@ class HTTPRouteHandler(BaseRouteHandler):
             merge_opts["response_headers"] = (*other.response_headers, *merge_opts.get("response_headers", ()))
             merge_opts["security"] = (*other.security, *merge_opts.get("security", ()))
             merge_opts["tags"] = (*other.tags, *merge_opts.get("tags", ()))
+            merge_opts["audience"] = (*other.audience, *merge_opts.get("audience", ()))
 
             # these are all properties which return a safe default if the corresponding
             # config value is not set, so we only merge the router configs and determine

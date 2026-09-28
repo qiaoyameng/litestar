@@ -205,6 +205,13 @@ class AppConfig:
     """
     tags: list[str] = field(default_factory=list)
     """A list of string tags that will be appended to the schema of all route handlers under the application."""
+    audience: list[str] = field(default_factory=list)
+    """A list of audience identifiers, marking all route handlers under the application as belonging to the given
+    audiences.
+
+    Used to generate audience-filtered OpenAPI schemas, see
+    :attr:`OpenAPIConfig.audiences <.openapi.config.OpenAPIConfig.audiences>`.
+    """
     template_config: TemplateConfigType | None = field(default=None)
     """An instance of :class:`TemplateConfig <.template.TemplateConfig>`."""
     type_decoders: TypeDecodersSequence | None = field(default=None)
