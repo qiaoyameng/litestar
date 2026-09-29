@@ -246,6 +246,11 @@ class DTOBackend:
 
         if request_encoding == RequestEncodingType.MESSAGEPACK:
             result = decode_msgpack(value=raw, target_type=self.annotation, type_decoders=type_decoders, strict=False)
+        elif (media_handler := _get_request_media_handler(asgi_connection, request_encoding)) is not None:
+            return cast(
+                "Struct | Collection[Struct]",
+                media_handler.decode_request_body(raw, self, asgi_connection),
+            )
         else:
             result = decode_json(value=raw, target_type=self.annotation, type_decoders=type_decoders, strict=False)
 
@@ -856,6 +861,26 @@ def _create_struct_for_field_definitions(
         rename=rename_strategy,
         forbid_unknown_fields=forbid_unknown_fields,
     )
+
+
+class _RequestMediaHandler(Protocol):
+    """Protocol for media handlers that decode request bodies for DTO data backends.
+
+    Plugins expose handlers through a ``request_media_handlers`` mapping of media type
+    to handler, e.g. :class:`CSVPlugin <litestar.plugins.csv.CSVPlugin>`.
+    """
+
+    def decode_request_body(self, body: bytes, backend: DTOBackend, connection: ASGIConnection) -> Any: ...
+
+
+def _get_request_media_handler(asgi_connection: ASGIConnection, media_type: str) -> _RequestMediaHandler | None:
+    """Return the media handler registered by an application plugin for ``media_type``, if any."""
+    app = getattr(asgi_connection, "app", None)
+    for plugin in getattr(app, "plugins", None) or ():
+        handlers = getattr(plugin, "request_media_handlers", None)
+        if handlers and media_type in handlers:
+            return cast("_RequestMediaHandler", handlers[media_type])
+    return None
 
 
 def build_annotation_for_backend(

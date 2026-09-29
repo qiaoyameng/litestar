@@ -10,6 +10,7 @@ plugins
     :hidden:
 
     attrs
+    csv
     flash_messages
     htmx
     jinja
