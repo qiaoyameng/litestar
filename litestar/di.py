@@ -151,7 +151,7 @@ class Provide:
                 signature, init_type_hints = plugin.get_typed_init(dependency)
                 self._parsed_fn_signature = ParsedSignature.from_signature(signature, init_type_hints)
             else:
-                self._parsed_fn_signature = ParsedSignature.from_fn(dependency, signature_namespace)
+                self._parsed_fn_signature = ParsedSignature.from_fn(self.dependency, signature_namespace)
 
         if self._signature_model is None:
             from litestar._signature import SignatureModel
@@ -164,16 +164,16 @@ class Provide:
                 type_decoders=type_decoders,
             )
 
-    async def __call__(self, **kwargs: Any) -> Any:
+    async def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Call the provider's dependency."""
 
         if self.use_cache and self.value is not Empty:
             return self.value
 
         if self.has_sync_callable:
-            value = self.dependency(**kwargs)
+            value = self.dependency(*args, **kwargs)
         else:
-            value = await self.dependency(**kwargs)
+            value = await self.dependency(*args, **kwargs)
 
         if self.use_cache:
             self.value = value

@@ -60,7 +60,8 @@ async def resolve_dependency(
         if signature_model._fields
         else {}
     )
-    value = await dependency.provide(**dependency_kwargs)
+    positional_args, keyword_kwargs = signature_model.build_call_arguments(dependency_kwargs)
+    value = await dependency.provide(*positional_args, **keyword_kwargs)
 
     if dependency.provide.has_sync_generator_dependency:
         cleanup_group.add(value)

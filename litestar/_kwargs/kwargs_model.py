@@ -457,15 +457,22 @@ class KwargsModel:
 
         return output
 
-    async def resolve_dependencies(self, connection: ASGIConnection, kwargs: dict[str, Any]) -> DependencyCleanupGroup:
+    async def resolve_dependencies(
+        self,
+        connection: ASGIConnection,
+        kwargs: dict[str, Any],
+        cleanup_group: DependencyCleanupGroup | None = None,
+    ) -> DependencyCleanupGroup:
         """Resolve all dependencies into the kwargs, recursively.
 
         Args:
             connection: An instance of :class:`Request <litestar.connection.Request>` or
                 :class:`WebSocket <litestar.connection.WebSocket>`.
             kwargs: Kwargs to pass to dependencies.
+            cleanup_group: Group to which generator dependencies are added for cleanup.
         """
-        cleanup_group = DependencyCleanupGroup()
+        if cleanup_group is None:
+            cleanup_group = DependencyCleanupGroup()
         for batch in self.dependency_batches:
             if len(batch) == 1:
                 await resolve_dependency(next(iter(batch)), connection, kwargs, cleanup_group)
@@ -478,6 +485,46 @@ class KwargsModel:
                     raise excgroup.exceptions[0] from excgroup  # type: ignore[attr-defined]
 
         return cleanup_group
+
+    async def validate_before_resolution(
+        self,
+        connection: ASGIConnection,
+        kwargs: dict[str, Any],
+        handler_signature_model: type[SignatureModel] | None = None,
+    ) -> None:
+        """Validate all externally provided values before any provider or handler is called.
+
+        Every dependency in the graph, as well as the route handler itself, is validated
+        against the raw kwargs before any side effects occur. Values supplied by
+        sub-dependencies are excluded from the validation of their consumers, since those
+        values are validated when their own providers are validated.
+
+        Args:
+            connection: An instance of :class:`Request <litestar.connection.Request>` or
+                :class:`WebSocket <litestar.connection.WebSocket>`.
+            kwargs: The raw kwargs extracted from the connection.
+            handler_signature_model: The signature model of the route handler.
+        """
+        for batch in self.dependency_batches:
+            for dependency in batch:
+                signature_model = dependency.provide.signature_model
+                if signature_model._fields:
+                    sub_dependency_keys = {sub.key for sub in dependency.dependencies}
+                    signature_model.validate_connection_kwargs(
+                        connection=connection,
+                        kwargs=kwargs,
+                        exclude=sub_dependency_keys,
+                    )
+
+        if handler_signature_model is not None and handler_signature_model._fields:
+            handler_dependency_keys = {
+                dependency.key for batch in self.dependency_batches for dependency in batch
+            }
+            handler_signature_model.validate_connection_kwargs(
+                connection=connection,
+                kwargs=kwargs,
+                exclude=handler_dependency_keys,
+            )
 
     @classmethod
     def _create_dependency_graph(cls, key: str, dependencies: dict[str, Provide]) -> DependencyContainer:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from litestar._kwargs.cleanup import DependencyCleanupGroup
 from litestar.connection import WebSocket
 from litestar.exceptions import ImproperlyConfiguredException
 from litestar.handlers import BaseRouteHandler
@@ -15,7 +16,6 @@ if TYPE_CHECKING:
 
     from litestar import Litestar, Router
     from litestar._kwargs import KwargsModel
-    from litestar._kwargs.cleanup import DependencyCleanupGroup
     from litestar.routes import BaseRoute
     from litestar.types import Dependencies, EmptyType, ExceptionHandler, Guard, Middleware
 
@@ -148,18 +148,27 @@ class WebsocketRouteHandler(BaseRouteHandler):
         if handler_kwargs_model.has_kwargs:
             parsed_kwargs = await handler_kwargs_model.to_kwargs(connection=connection)
 
+            await handler_kwargs_model.validate_before_resolution(
+                connection=connection,
+                kwargs=parsed_kwargs,
+                handler_signature_model=self.signature_model,
+            )
+
             if handler_kwargs_model.dependency_batches:
-                cleanup_group = await handler_kwargs_model.resolve_dependencies(connection, parsed_kwargs)
+                cleanup_group = DependencyCleanupGroup()
+                await handler_kwargs_model.resolve_dependencies(connection, parsed_kwargs, cleanup_group)
 
             parsed_kwargs = self.signature_model.parse_values_from_connection_kwargs(
                 connection=connection, kwargs=parsed_kwargs
             )
 
+        positional_args, keyword_kwargs = self.signature_model.build_call_arguments(parsed_kwargs)
+
         if cleanup_group:
             async with cleanup_group:
-                await self.fn(**parsed_kwargs)
+                await self.fn(*positional_args, **keyword_kwargs)
         else:
-            await self.fn(**parsed_kwargs)
+            await self.fn(*positional_args, **keyword_kwargs)
 
 
 def websocket(

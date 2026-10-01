@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, AnyStr, TypedDict, cast
 
 from msgspec.msgpack import decode as _decode_msgpack_plain
 
+from litestar._kwargs.cleanup import DependencyCleanupGroup
 from litestar._layers.utils import narrow_response_cookies, narrow_response_headers
 from litestar.connection import Request
 from litestar.datastructures import CacheControlHeader, ETag, FormMultiDict, Header
@@ -740,15 +741,31 @@ class HTTPRouteHandler(BaseRouteHandler):
                     if kwargs.get("data") is Empty:
                         del kwargs["data"]
 
+                    # validate every dependency and the handler before any provider runs, so
+                    # that failing validation never triggers side effects
+                    await parameter_model.validate_before_resolution(
+                        connection=request,
+                        kwargs=kwargs,
+                        handler_signature_model=self.signature_model,
+                    )
+
+                    # enter the cleanup group before resolving dependencies so that
+                    # generators already started are shut down if a later provider fails
                     if parameter_model.dependency_batches:
-                        cleanup_group = await parameter_model.resolve_dependencies(request, kwargs)
+                        cleanup_group = DependencyCleanupGroup()
                         await stack.enter_async_context(cleanup_group)
+                        await parameter_model.resolve_dependencies(request, kwargs, cleanup_group)
 
                     parsed_kwargs = self.signature_model.parse_values_from_connection_kwargs(
                         connection=request, kwargs=kwargs
                     )
 
-                response_data = self.fn(**parsed_kwargs) if self.has_sync_callable else await self.fn(**parsed_kwargs)
+                positional_args, keyword_kwargs = self.signature_model.build_call_arguments(parsed_kwargs)
+                response_data = (
+                    self.fn(*positional_args, **keyword_kwargs)
+                    if self.has_sync_callable
+                    else await self.fn(*positional_args, **keyword_kwargs)
+                )
 
             return await self.to_response(data=response_data, request=request)
 

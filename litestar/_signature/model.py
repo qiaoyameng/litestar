@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from functools import partial
+from inspect import Parameter
 from pathlib import Path, PurePath
 from typing import (
     TYPE_CHECKING,
@@ -106,6 +107,7 @@ class SignatureModel(Struct):
     _data_dto: ClassVar[type[AbstractDTO] | None]
     _dependency_name_set: ClassVar[set[str]]
     _fields: ClassVar[dict[str, FieldDefinition]]
+    _positional_only_parameters: ClassVar[tuple[str, ...]]
     _return_annotation: ClassVar[Any]
 
     @classmethod
@@ -213,6 +215,94 @@ class SignatureModel(Struct):
                 messages.append(message)
             raise cls._create_exception(messages=messages, connection=connection) from e
 
+    @classmethod
+    def validate_connection_kwargs(
+        cls,
+        connection: ASGIConnection,
+        kwargs: dict[str, Any],
+        exclude: set[str] | None = None,
+    ) -> None:
+        """Validate externally provided values without consuming dependencies.
+
+        Unlike :meth:`parse_values_from_connection_kwargs`, this validates each field
+        independently, so fields whose values will be provided by sub-dependencies can be
+        excluded. This allows all validation for a dependency graph to be performed before any
+        provider is called, preventing side effects when validation fails.
+
+        Args:
+            connection: The ASGI connection instance.
+            kwargs: A dictionary of kwargs available at validation time.
+            exclude: Field names that will be provided later by dependencies and so should
+                not be validated.
+
+        Raises:
+            ValidationException: If client-provided values failed validation.
+            InternalServerException: If another exception has been raised.
+        """
+        deserializer = partial(_deserializer, default_deserializer=connection.route_handler.default_deserializer)
+        excluded_fields = exclude or set()
+
+        messages: list[ErrorMessage] = []
+        for field_name in cls._fields:
+            if field_name in excluded_fields:
+                continue
+            field_definition = cls._fields[field_name]
+            if field_name not in kwargs:
+                # missing values are either provided by (already validated) dependencies or
+                # are optional fields with a default
+                if field_definition.is_required and not field_definition.has_default:
+                    messages.append(
+                        cls._build_error_message(
+                            keys=[field_name],
+                            exc_msg=f"Object missing required field `{field_name}`",
+                            connection=connection,
+                        ),
+                    )
+                continue
+            try:
+                convert(
+                    kwargs[field_name],
+                    type=cls.__annotations__[field_name],
+                    strict=False,
+                    dec_hook=deserializer,
+                    str_keys=True,
+                )
+            except ExtendedMsgSpecValidationError as e:
+                for exc in e.errors:
+                    keys = [field_name, *(str(loc) for loc in exc["loc"])]
+                    messages.append(
+                        cls._build_error_message(keys=keys, exc_msg=exc["msg"], connection=connection),
+                    )
+            except ValidationError as e:
+                match = ERR_RE.search(str(e))
+                keys = [field_name, str(match.group(1))] if match else [field_name]
+                messages.append(cls._build_error_message(keys=keys, exc_msg=str(e), connection=connection))
+
+        if messages:
+            raise cls._create_exception(messages=messages, connection=connection)
+
+    @classmethod
+    def build_call_arguments(cls, parsed_kwargs: dict[str, Any]) -> tuple[list[Any], dict[str, Any]]:
+        """Split validated kwargs into positional and keyword arguments.
+
+        Positional-only parameters are returned positionally, in signature order, while all
+        remaining parameters are returned as keyword arguments.
+
+        Args:
+            parsed_kwargs: A dictionary of parsed values keyed by the external field names.
+
+        Returns:
+            A tuple of a list of positional arguments and a dictionary of keyword arguments.
+        """
+        if not cls._positional_only_parameters:
+            return [], parsed_kwargs
+
+        positional_args = [parsed_kwargs[name] for name in cls._positional_only_parameters]
+        keyword_kwargs = {
+            name: value for name, value in parsed_kwargs.items() if name not in cls._positional_only_parameters
+        }
+        return positional_args, keyword_kwargs
+
     def to_dict(self) -> dict[str, Any]:
         """Normalize access to the signature model's dictionary method, because different backends use different methods
         for this.
@@ -239,6 +329,12 @@ class SignatureModel(Struct):
         )
 
         struct_fields: list[tuple[str, Any, Any]] = []
+
+        positional_only_parameters = tuple(
+            name
+            for name, parameter in parsed_signature.original_signature.parameters.items()
+            if parameter.kind is Parameter.POSITIONAL_ONLY
+        )
 
         for field_definition in parsed_signature.parameters.values():
             meta_data: Meta | None = None
@@ -280,6 +376,7 @@ class SignatureModel(Struct):
                 "_dependency_name_set": dependency_names,
                 "_fields": parsed_signature.parameters,
                 "_data_dto": data_dto,
+                "_positional_only_parameters": positional_only_parameters,
             },
             kw_only=True,
         )

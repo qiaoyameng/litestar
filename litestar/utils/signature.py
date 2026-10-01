@@ -11,6 +11,7 @@ from litestar import connection, datastructures, params, types
 from litestar.exceptions import ImproperlyConfiguredException
 from litestar.types import Empty
 from litestar.typing import FieldDefinition
+from litestar.utils.helpers import unwrap_partial
 from litestar.utils.typing import expand_type_var_in_type_hint, unwrap_annotation
 from litestar.utils.warnings import warn_signature_namespace_override
 
@@ -194,8 +195,17 @@ class ParsedSignature:
         Returns:
             ParsedSignature
         """
-        signature = Signature.from_callable(fn)
-        fn_type_hints = get_fn_type_hints(fn, namespace=signature_namespace)
+        # `inspect.signature` understands bound arguments of ``functools.partial`` objects,
+        # so it must be called on the partial itself. Type hints are always resolved on the
+        # underlying callable, as ``get_type_hints`` does not support partial objects.
+        target_for_hints = unwrap_partial(fn)
+        try:
+            signature = Signature.from_callable(fn)
+        except ValueError:
+            # inspect raises for some invalid partial bindings, e.g. binding a keyword
+            # argument to a positional-only parameter
+            signature = Signature.from_callable(target_for_hints)
+        fn_type_hints = get_fn_type_hints(target_for_hints, namespace=signature_namespace)
         expanded_type_hints = expand_type_var_in_type_hint(fn_type_hints, signature_namespace)
 
         return cls.from_signature(signature, expanded_type_hints)
