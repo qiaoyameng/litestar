@@ -155,11 +155,13 @@ class WebsocketRouteHandler(BaseRouteHandler):
                 connection=connection, kwargs=parsed_kwargs
             )
 
+        positional_args, keyword_kwargs = self.parsed_fn_signature.to_call_args(parsed_kwargs)
+
         if cleanup_group:
             async with cleanup_group:
-                await self.fn(**parsed_kwargs)
+                await self.fn(*positional_args, **keyword_kwargs)
         else:
-            await self.fn(**parsed_kwargs)
+            await self.fn(*positional_args, **keyword_kwargs)
 
 
 def websocket(

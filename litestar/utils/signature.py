@@ -3,7 +3,8 @@ from __future__ import annotations
 import sys
 import typing
 from dataclasses import dataclass, replace
-from inspect import Signature, getmembers, isclass, ismethod
+from functools import partial
+from inspect import Parameter, Signature, getmembers, isclass, ismethod
 from itertools import chain
 from typing import TYPE_CHECKING, Annotated, Any, Self, Union, get_args, get_origin, get_type_hints
 
@@ -138,7 +139,7 @@ def get_fn_type_hints(fn: Any, namespace: dict[str, Any] | None = None) -> dict[
     Returns:
         Mapping of names to types.
     """
-    fn_to_inspect: Any = fn
+    fn_to_inspect: Any = fn.func if isinstance(fn, partial) else fn
 
     module_name = fn_to_inspect.__module__
 
@@ -182,6 +183,33 @@ class ParsedSignature:
     """The return annotation of the callable."""
     original_signature: Signature
     """The raw signature as returned by :func:`inspect.signature`"""
+
+    @property
+    def positional_only_parameters(self) -> tuple[str, ...]:
+        """Names of positional-only parameters, in signature order."""
+        return tuple(
+            name
+            for name, parameter in self.original_signature.parameters.items()
+            if parameter.kind is Parameter.POSITIONAL_ONLY
+        )
+
+    def to_call_args(self, kwargs: dict[str, Any]) -> tuple[tuple[Any, ...], dict[str, Any]]:
+        """Split validated keyword values into positional and keyword arguments.
+
+        Positional-only parameters are extracted, in signature order, so the underlying
+        callable is invoked positionally. Every other parameter remains a keyword
+        argument keyed by its external field name.
+
+        Args:
+            kwargs: Values keyed by the external field names of the signature.
+
+        Returns:
+            A tuple of ``(positional_args, keyword_kwargs)``.
+        """
+        positional_only = self.positional_only_parameters
+        positional_args = tuple(kwargs[name] for name in positional_only)
+        keyword_kwargs = {name: value for name, value in kwargs.items() if name not in positional_only}
+        return positional_args, keyword_kwargs
 
     @classmethod
     def from_fn(cls, fn: AnyCallable, signature_namespace: dict[str, Any]) -> Self:

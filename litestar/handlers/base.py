@@ -280,7 +280,9 @@ class BaseRouteHandler:
             A ParsedSignature instance
         """
         if self._parsed_fn_signature is Empty:
-            self._parsed_fn_signature = ParsedSignature.from_fn(unwrap_partial(self.fn), self.signature_namespace)
+            # parse ``self.fn`` directly so parameters already bound by a partial are
+            # not treated as values that still need to be injected
+            self._parsed_fn_signature = ParsedSignature.from_fn(self.fn, self.signature_namespace)
 
         return self._parsed_fn_signature
 

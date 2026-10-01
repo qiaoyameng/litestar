@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from functools import partial
+
 from inspect import isasyncgenfunction, isclass, isfunction, isgeneratorfunction, ismethod
 from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeAlias, TypeVar
 
@@ -9,7 +11,7 @@ from litestar.exceptions import ImproperlyConfiguredException
 from litestar.plugins import DIPlugin, PluginRegistry
 from litestar.types import Empty, TypeDecodersSequence
 from litestar.utils import ensure_async_callable
-from litestar.utils.helpers import unwrap_partial
+from litestar.utils.sync import AsyncCallable
 from litestar.utils.predicates import is_async_callable
 from litestar.utils.signature import ParsedSignature
 from litestar.utils.warnings import (
@@ -82,13 +84,19 @@ class Provide:
             raise ImproperlyConfiguredException("Provider dependency must be a callable value")
 
         is_class_dependency = isclass(dependency)
-        is_function = isfunction(dependency)
-        is_method = ismethod(dependency)
-        is_callable_instance = not is_class_dependency and not is_function and not is_method
-        if is_class_dependency or is_callable_instance:
-            check_target = dependency.__call__  # type: ignore[operator]
-        else:
-            check_target = dependency
+
+        # ``functools.partial`` and the ``AsyncCallable`` thread-pool wrapper hide the
+        # underlying function from ``isgeneratorfunction`` etc., so unwrap them before
+        # deciding what to inspect while retaining the (possibly partial-bound) callable.
+        check_target = dependency.func if isinstance(dependency, (partial, AsyncCallable)) else dependency
+        is_callable_instance = not (
+            isclass(check_target)
+            or isfunction(check_target)
+            or ismethod(check_target)
+            or isinstance(check_target, (partial, AsyncCallable))
+        )
+        if isclass(check_target) or is_callable_instance:
+            check_target = check_target.__call__  # type: ignore[operator]
         self.has_sync_generator_dependency = isgeneratorfunction(check_target)
         self.has_async_generator_dependency = isasyncgenfunction(check_target)
 
@@ -142,7 +150,9 @@ class Provide:
         type_decoders: TypeDecodersSequence,
     ) -> None:
         if self._parsed_fn_signature is None:
-            dependency = unwrap_partial(self.dependency)
+            # resolve a signature that reflects any positional/keyword arguments pre-bound
+            # by a partial or by the ``sync_to_thread`` ``AsyncCallable`` wrapper
+            dependency = self.dependency.func if isinstance(self.dependency, AsyncCallable) else self.dependency
             plugin = next(
                 (p for p in plugins.di if isinstance(p, DIPlugin) and p.has_typed_init(dependency)),
                 None,
@@ -170,10 +180,19 @@ class Provide:
         if self.use_cache and self.value is not Empty:
             return self.value
 
-        if self.has_sync_callable:
-            value = self.dependency(**kwargs)
+        # when the provider has been finalized (the normal request path) split any
+        # positional-only parameters so they are passed positionally. Unfinalized
+        # providers, e.g. invoked directly in tests, keep the previous keyword
+        # behaviour.
+        if self._parsed_fn_signature is None:
+            positional_args, keyword_kwargs = (), kwargs
         else:
-            value = await self.dependency(**kwargs)
+            positional_args, keyword_kwargs = self._parsed_fn_signature.to_call_args(kwargs)
+
+        if self.has_sync_callable:
+            value = self.dependency(*positional_args, **keyword_kwargs)
+        else:
+            value = await self.dependency(*positional_args, **keyword_kwargs)
 
         if self.use_cache:
             self.value = value

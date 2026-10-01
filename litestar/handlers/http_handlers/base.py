@@ -748,7 +748,12 @@ class HTTPRouteHandler(BaseRouteHandler):
                         connection=request, kwargs=kwargs
                     )
 
-                response_data = self.fn(**parsed_kwargs) if self.has_sync_callable else await self.fn(**parsed_kwargs)
+                positional_args, keyword_kwargs = self.parsed_fn_signature.to_call_args(parsed_kwargs)
+                response_data = (
+                    self.fn(*positional_args, **keyword_kwargs)
+                    if self.has_sync_callable
+                    else await self.fn(*positional_args, **keyword_kwargs)
+                )
 
             return await self.to_response(data=response_data, request=request)
 

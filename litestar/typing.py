@@ -9,7 +9,10 @@ from dataclasses import dataclass, is_dataclass
 from enum import Enum
 from inspect import Parameter, Signature
 from typing import Annotated as te_Annotated
-from typing import Any, AnyStr, ForwardRef, Literal, TypeVar, cast
+from typing import TYPE_CHECKING, Any, AnyStr, ForwardRef, Literal, TypeVar, cast
+
+if TYPE_CHECKING:
+    from inspect import _ParameterKind
 
 from litestar.utils.errors import raise_for_kwarg_as_default
 
@@ -119,6 +122,7 @@ class FieldDefinition:
         "args",
         "default",
         "extra",
+        "kind",
         "inner_types",
         "instantiable_origin",
         "kwarg_definition",
@@ -155,6 +159,8 @@ class FieldDefinition:
     """Default value of the field."""
     extra: dict[str, Any]
     """A mapping of extra values."""
+    kind: _ParameterKind
+    """The kind of the function parameter this field was created from, if any."""
     kwarg_definition: KwargDefinition | None
     """Kwarg Parameter."""
     name: str
@@ -507,6 +513,7 @@ class FieldDefinition:
         kwargs.setdefault("extra", {})
         kwargs.setdefault("inner_types", tuple(FieldDefinition.from_annotation(arg) for arg in annotation_args))
         kwargs.setdefault("instantiable_origin", get_instantiable_origin(origin, unwrapped))
+        kwargs.setdefault("kind", Parameter.POSITIONAL_OR_KEYWORD)
         kwargs.setdefault("kwarg_definition", None)
         kwargs.setdefault("metadata", metadata)
         kwargs.setdefault("name", "")
@@ -526,6 +533,7 @@ class FieldDefinition:
         inner_types: tuple[FieldDefinition, ...] | None = None,
         kwarg_definition: KwargDefinition | None = None,
         extra: dict[str, Any] | None = None,
+        kind: _ParameterKind = Parameter.POSITIONAL_OR_KEYWORD,
     ) -> FieldDefinition:
         """Create a new FieldDefinition instance.
 
@@ -546,13 +554,16 @@ class FieldDefinition:
             name=name,
             default=default,
             **{
-                k: v
-                for k, v in {
-                    "inner_types": inner_types,
-                    "kwarg_definition": kwarg_definition,
-                    "extra": extra,
-                }.items()
-                if v is not None
+                **{
+                    k: v
+                    for k, v in {
+                        "inner_types": inner_types,
+                        "kwarg_definition": kwarg_definition,
+                        "extra": extra,
+                        "kind": kind,
+                    }.items()
+                    if v is not None
+                },
             },
         )
 
@@ -594,6 +605,7 @@ class FieldDefinition:
             annotation=annotation,
             name=parameter.name,
             default=Empty if parameter.default is Signature.empty else parameter.default,
+            kind=parameter.kind,
         )
 
     def match_predicate_recursively(self, predicate: Callable[[FieldDefinition], bool]) -> bool:
