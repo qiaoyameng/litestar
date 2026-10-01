@@ -43,4 +43,9 @@ class WebSocketRoute(BaseRoute[WebSocketScope]):
             None
         """
         socket = self.route_handler.websocket_class(scope=scope, receive=receive, send=send)
-        await self.route_handler.handle(connection=socket)
+        import traceback
+        try:
+            await self.route_handler.handle(connection=socket)
+        except BaseException:
+            traceback.print_exc()
+            raise

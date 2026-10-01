@@ -21,7 +21,14 @@ if TYPE_CHECKING:
 
 
 class WebsocketRouteHandler(BaseRouteHandler):
-    __slots__ = ("_kwargs_model", "_websocket_class")
+    __slots__ = (
+        "_connection_signature_model",
+        "_kwargs_model",
+        "_message_kwargs_model",
+        "_original_callback_signature",
+        "_original_callback_type_hints",
+        "_websocket_class",
+    )
 
     def __init__(
         self,
@@ -64,6 +71,10 @@ class WebsocketRouteHandler(BaseRouteHandler):
         """
         self._websocket_class = websocket_class
         self._kwargs_model: KwargsModel | EmptyType = Empty
+        self._message_kwargs_model: KwargsModel | EmptyType | None = Empty
+        self._original_callback_signature: Any = None
+        self._original_callback_type_hints: dict[str, Any] = {}
+        self._connection_signature_model: Any = Empty
 
         super().__init__(
             fn=fn,
@@ -151,7 +162,12 @@ class WebsocketRouteHandler(BaseRouteHandler):
             if handler_kwargs_model.dependency_batches:
                 cleanup_group = await handler_kwargs_model.resolve_dependencies(connection, parsed_kwargs)
 
-            parsed_kwargs = self.signature_model.parse_values_from_connection_kwargs(
+            connection_signature_model = (
+                self._connection_signature_model
+                if self._connection_signature_model is not Empty
+                else self.signature_model
+            )
+            parsed_kwargs = connection_signature_model.parse_values_from_connection_kwargs(
                 connection=connection, kwargs=parsed_kwargs
             )
 

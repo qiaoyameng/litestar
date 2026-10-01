@@ -27,9 +27,11 @@ from litestar.utils.signature import ParsedSignature, get_fn_type_hints
 
 from ._utils import (
     ListenerHandler,
+    create_connection_handler_signature,
     create_handle_receive,
     create_handle_send,
     create_handler_signature,
+    create_message_handler_signature,
     create_stub_dependency,
 )
 from .route_handler import WebsocketRouteHandler
@@ -38,11 +40,13 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Coroutine, Mapping, Sequence
 
     from litestar import Litestar, Router
+    from litestar._kwargs import KwargsModel
     from litestar.di import NamedDependency
     from litestar.dto import AbstractDTO
     from litestar.routes import BaseRoute
     from litestar.types.asgi_types import WebSocketMode
     from litestar.types.composite_types import ParametersMap, TypeDecodersSequence
+    from litestar.utils.signature import ParsedSignature
 
 
 __all__ = ("WebsocketListener", "WebsocketListenerRouteHandler", "websocket_listener")
@@ -56,13 +60,17 @@ class WebsocketListenerRouteHandler(WebsocketRouteHandler):
 
     __slots__ = {  # noqa: RUF023
         "connection_accept_handler": "Callback to accept a WebSocket connection. By default, calls WebSocket.accept",
+        "max_concurrency": "Maximum number of messages processed concurrently within a single connection",
+        "message_id_key": "Key used to extract a message identifier and correlate replies",
         "on_accept": "Callback invoked after a WebSocket connection has been accepted",
         "on_disconnect": "Callback invoked after a WebSocket connection has been closed",
         "_connection_lifespan": None,
+        "_message_kwargs_model": None,
         "_receive_handler": None,
         "_receive_mode": None,
         "_send_handler": None,
         "_send_mode": None,
+        "_stub_dependency_keys": None,
     }
 
     @overload
@@ -76,6 +84,8 @@ class WebsocketListenerRouteHandler(WebsocketRouteHandler):
         dto: type[AbstractDTO] | None | EmptyType = Empty,
         exception_handlers: dict[int | type[Exception], ExceptionHandler] | None = None,
         guards: Sequence[Guard] | None = None,
+        max_concurrency: int = 1,
+        message_id_key: str | None = None,
         middleware: Sequence[Middleware] | None = None,
         receive_mode: WebSocketMode = "text",
         send_mode: WebSocketMode = "text",
@@ -101,6 +111,8 @@ class WebsocketListenerRouteHandler(WebsocketRouteHandler):
         dto: type[AbstractDTO] | None | EmptyType = Empty,
         exception_handlers: dict[int | type[Exception], ExceptionHandler] | None = None,
         guards: Sequence[Guard] | None = None,
+        max_concurrency: int = 1,
+        message_id_key: str | None = None,
         middleware: Sequence[Middleware] | None = None,
         receive_mode: WebSocketMode = "text",
         send_mode: WebSocketMode = "text",
@@ -128,6 +140,8 @@ class WebsocketListenerRouteHandler(WebsocketRouteHandler):
         dto: type[AbstractDTO] | None | EmptyType = Empty,
         exception_handlers: dict[int | type[Exception], ExceptionHandler] | None = None,
         guards: Sequence[Guard] | None = None,
+        max_concurrency: int = 1,
+        message_id_key: str | None = None,
         middleware: Sequence[Middleware] | None = None,
         receive_mode: WebSocketMode = "text",
         send_mode: WebSocketMode = "text",
@@ -159,6 +173,12 @@ class WebsocketListenerRouteHandler(WebsocketRouteHandler):
                 validation of request data.
             exception_handlers: A mapping of status codes and/or exception types to handler functions.
             guards: A sequence of :class:`Guard <.types.Guard>` callables.
+            max_concurrency: Maximum number of messages that are processed concurrently within a single
+                connection. Defaults to ``1``, meaning messages are handled strictly in order, one after another.
+            message_id_key: When set, received messages are expected to be JSON objects containing a message
+                identifier under this key. The identifier is removed from the payload passed to the handler and is
+                added to the JSON reply under the same key, allowing replies to be correlated with their messages
+                when messages are processed concurrently.
             middleware: A sequence of :class:`Middleware <.types.Middleware>`.
             receive_mode: Websocket mode to receive data in, either `text` or `binary`.
             send_mode: Websocket mode to receive data in, either `text` or `binary`.
@@ -188,6 +208,13 @@ class WebsocketListenerRouteHandler(WebsocketRouteHandler):
                 "(on_accept, on_disconnect, connection_accept_handler)",
             )
 
+        if not isinstance(max_concurrency, int) or isinstance(max_concurrency, bool) or max_concurrency < 1:
+            raise ImproperlyConfiguredException("max_concurrency must be a positive integer")
+
+        self.max_concurrency = max_concurrency
+        self.message_id_key = message_id_key
+        self._stub_dependency_keys: set[str] = set()
+        self._message_kwargs_model: Any = Empty
         self._receive_mode: WebSocketMode = receive_mode
         self._send_mode: WebSocketMode = send_mode
         self._connection_lifespan = connection_lifespan
@@ -207,6 +234,12 @@ class WebsocketListenerRouteHandler(WebsocketRouteHandler):
         listener_dependencies["on_accept_dependencies"] = create_stub_dependency(self.on_accept)
 
         listener_dependencies["on_disconnect_dependencies"] = create_stub_dependency(self.on_disconnect)
+
+        self._stub_dependency_keys = {
+            "connection_lifespan_dependencies",
+            "on_accept_dependencies",
+            "on_disconnect_dependencies",
+        }
 
         super().__init__(
             fn=fn,
@@ -234,6 +267,8 @@ class WebsocketListenerRouteHandler(WebsocketRouteHandler):
             send_mode=self._send_mode,
             connection_lifespan=self._connection_lifespan,
             connection_accept_handler=self.connection_accept_handler,
+            max_concurrency=self.max_concurrency,
+            message_id_key=self.message_id_key,
             on_accept=self.on_accept,
             on_disconnect=self.on_disconnect,
         )
@@ -241,10 +276,138 @@ class WebsocketListenerRouteHandler(WebsocketRouteHandler):
 
     def on_registration(self, route: BaseRoute, app: Litestar) -> None:
         self.fn = self._prepare_fn()
-        super().on_registration(route, app)
+        # finalize the dependencies without building the default connection kwargs model,
+        # which is built explicitly below so message-scoped dependencies can be excluded.
+        super(WebsocketRouteHandler, self).on_registration(route=route, app=app)
+        self._message_kwargs_model = self._create_message_kwargs_model(
+            path_parameters=route.path_parameters,
+        )
+        self._kwargs_model = self._create_connection_kwargs_model(
+            path_parameters=route.path_parameters,
+        )
+
+    def _create_connection_kwargs_model(self, path_parameters: set[str]) -> KwargsModel:
+        """Create the kwargs model for the connection scope.
+
+        Only connection-scoped dependencies (requested by the connection lifespan / hooks)
+        are resolved by this model; message-scoped dependencies are resolved independently
+        for every message and are excluded here so they are not created once per connection.
+        """
+        from litestar._kwargs import KwargsModel
+        from litestar._signature import SignatureModel
+        from litestar.utils.signature import ParsedSignature
+
+        message_dependency_keys = self._get_message_dependency_keys()
+
+        connection_parsed_signature = ParsedSignature.from_signature(
+            create_connection_handler_signature(
+                self._original_callback_signature,
+                excluded_parameter_names=message_dependency_keys,
+            ),
+            fn_type_hints={
+                **self._original_callback_type_hints,
+                **get_fn_type_hints(ListenerHandler.__call__, namespace=self.signature_namespace),
+            },
+        )
+
+        self._connection_signature_model = SignatureModel.create(
+            dependency_name_set=set(self.dependencies),
+            fn=self.fn,
+            parsed_signature=connection_parsed_signature,
+            type_decoders=self.type_decoders,
+        )
+
+        return KwargsModel.create_for_signature_model(
+            signature_model=self._connection_signature_model,
+            parsed_signature=connection_parsed_signature,
+            dependencies=self.dependencies,
+            path_parameters=set(path_parameters),
+            layered_parameters=self.parameter_field_definitions,
+            ctx=self,
+            excluded_dependency_keys=message_dependency_keys,
+        )
+
+    def _get_message_dependency_keys(self) -> set[str]:
+        """Return the keys of message-scoped dependencies.
+
+        A dependency is connection-scoped when it is (transitively) requested by the
+        connection lifespan, ``on_accept`` or ``on_disconnect``. Every other handler
+        dependency is message-scoped, i.e. resolved independently for every message.
+        """
+        return set(self.dependencies) - self._get_connection_dependency_keys()
+
+    def _create_message_kwargs_model(self, path_parameters: set[str]) -> KwargsModel | None:
+        """Create a kwargs model resolving dependencies independently for every message.
+
+        Connection-scoped dependencies (those requested by the connection lifespan / hooks)
+        are excluded: they are resolved once for the lifetime of the connection and passed
+        through from the connection scope.
+        """
+        from litestar._kwargs import KwargsModel
+        from litestar._signature import SignatureModel
+        from litestar.utils.signature import ParsedSignature
+
+        connection_dependency_keys = self._get_connection_dependency_keys()
+
+        message_parsed_signature = ParsedSignature.from_signature(
+            create_message_handler_signature(self._original_callback_signature),
+            fn_type_hints={
+                **self._original_callback_type_hints,
+                **get_fn_type_hints(ListenerHandler.__call__, namespace=self.signature_namespace),
+            },
+        )
+
+        message_signature_model = SignatureModel.create(
+            dependency_name_set=set(self.dependencies),
+            fn=self.fn,
+            parsed_signature=message_parsed_signature,
+            type_decoders=self.type_decoders,
+        )
+
+        model = KwargsModel.create_for_message_scope(
+            signature_model=message_signature_model,
+            parsed_signature=message_parsed_signature,
+            dependencies=self.dependencies,
+            excluded_dependency_keys=connection_dependency_keys,
+            path_parameters=set(path_parameters),
+            layered_parameters=self.parameter_field_definitions,
+            ctx=self,
+        )
+        return model if model.has_kwargs else None
+
+    def _get_connection_dependency_keys(self) -> set[str]:
+        """Return the keys of all dependencies required by the connection lifespan/hooks.
+
+        These dependencies are resolved once per connection and reused across messages.
+        """
+        keys: set[str] = set()
+
+        def collect(key: str, seen: set[str]) -> None:
+            if key in seen:
+                return
+            seen.add(key)
+            provide = self.dependencies.get(key)
+            if provide is None:
+                return
+            keys.add(key)
+            for sub_key in provide.signature_model._fields:
+                if sub_key in self.dependencies:
+                    collect(sub_key, seen)
+
+        for root_key in self._stub_dependency_keys:
+            provide = self.dependencies.get(root_key)
+            if provide is None:
+                continue
+            for requested_key in provide.signature_model._fields:
+                if requested_key in self.dependencies:
+                    collect(requested_key, set())
+        return keys
 
     def _prepare_fn(self) -> ListenerHandler:
-        parsed_signature = ParsedSignature.from_fn(self.fn, self.signature_namespace)
+        if isinstance(self.fn, ListenerHandler):
+            return self.fn
+        original_fn = self.fn
+        parsed_signature = ParsedSignature.from_fn(original_fn, self.signature_namespace)
 
         if "data" not in parsed_signature.parameters:
             raise ImproperlyConfiguredException("Websocket listeners must accept a 'data' parameter")
@@ -255,18 +418,20 @@ class WebsocketListenerRouteHandler(WebsocketRouteHandler):
 
         # we are manipulating the signature of the decorated function below, so we must store the original values for
         # use elsewhere.
+        self._original_callback_signature = parsed_signature.original_signature
+        self._original_callback_type_hints = get_fn_type_hints(original_fn, namespace=self.signature_namespace)
         self._parsed_return_field = parsed_signature.return_type
         self._parsed_data_field = parsed_signature.parameters.get("data")
         self._parsed_fn_signature = ParsedSignature.from_signature(
             create_handler_signature(parsed_signature.original_signature),
             fn_type_hints={
-                **get_fn_type_hints(self.fn, namespace=self.signature_namespace),
+                **self._original_callback_type_hints,
                 **get_fn_type_hints(ListenerHandler.__call__, namespace=self.signature_namespace),
             },
         )
 
         return ListenerHandler(
-            listener=self, fn=self.fn, parsed_signature=parsed_signature, namespace=self.signature_namespace
+            listener=self, fn=original_fn, parsed_signature=parsed_signature, namespace=self.signature_namespace
         )
 
     def _validate_handler_function(self) -> None:
@@ -328,6 +493,10 @@ class WebsocketListener(ABC):
     """A mapping of status codes and/or exception types to handler functions."""
     guards: list[Guard] | None = None
     """A sequence of :class:`Guard <.types.Guard>` callables."""
+    max_concurrency: int = 1
+    """Maximum number of messages processed concurrently within a single connection."""
+    message_id_key: str | None = None
+    """Key of the message identifier used to correlate replies with requests."""
     middleware: list[Middleware] | None = None
     """A sequence of :class:`Middleware <.types.Middleware>`."""
     receive_mode: WebSocketMode = "text"
@@ -371,6 +540,8 @@ class WebsocketListener(ABC):
             dto=self.dto,
             exception_handlers=self.exception_handlers,
             guards=self.guards,
+            max_concurrency=self.max_concurrency,
+            message_id_key=self.message_id_key,
             middleware=self.middleware,
             send_mode=self.send_mode,
             receive_mode=self.receive_mode,
@@ -420,6 +591,8 @@ def websocket_listener(
     dto: type[AbstractDTO] | None | EmptyType = Empty,
     exception_handlers: dict[int | type[Exception], ExceptionHandler] | None = None,
     guards: list[Guard] | None = None,
+    max_concurrency: int = 1,
+    message_id_key: str | None = None,
     middleware: list[Middleware] | None = None,
     receive_mode: WebSocketMode = "text",
     send_mode: WebSocketMode = "text",
@@ -443,6 +616,8 @@ def websocket_listener(
     dto: type[AbstractDTO] | None | EmptyType = Empty,
     exception_handlers: dict[int | type[Exception], ExceptionHandler] | None = None,
     guards: list[Guard] | None = None,
+    max_concurrency: int = 1,
+    message_id_key: str | None = None,
     middleware: list[Middleware] | None = None,
     receive_mode: WebSocketMode = "text",
     send_mode: WebSocketMode = "text",
@@ -468,6 +643,8 @@ def websocket_listener(
     dto: type[AbstractDTO] | None | EmptyType = Empty,
     exception_handlers: dict[int | type[Exception], ExceptionHandler] | None = None,
     guards: list[Guard] | None = None,
+    max_concurrency: int = 1,
+    message_id_key: str | None = None,
     middleware: list[Middleware] | None = None,
     receive_mode: WebSocketMode = "text",
     send_mode: WebSocketMode = "text",
@@ -497,6 +674,10 @@ def websocket_listener(
             validation of request data.
         exception_handlers: A mapping of status codes and/or exception types to handler functions.
         guards: A sequence of :class:`Guard <.types.Guard>` callables.
+        max_concurrency: Maximum number of messages processed concurrently within a single connection. Defaults
+            to ``1`` (messages are handled strictly sequentially).
+        message_id_key: Key of the message identifier in JSON messages, used to correlate replies with requests
+            when messages are processed concurrently.
         middleware: A sequence of :class:`Middleware <.types.Middleware>`.
         receive_mode: Websocket mode to receive data in, either `text` or `binary`.
         send_mode: Websocket mode to receive data in, either `text` or `binary`.
@@ -530,6 +711,8 @@ def websocket_listener(
             dto=dto,
             exception_handlers=exception_handlers,
             guards=guards,
+            max_concurrency=max_concurrency,
+            message_id_key=message_id_key,
             middleware=middleware,
             receive_mode=receive_mode,
             send_mode=send_mode,

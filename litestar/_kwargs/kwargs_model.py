@@ -210,6 +210,7 @@ class KwargsModel:
         layered_parameters: dict[str, FieldDefinition],
         dependencies: dict[str, Provide],
         field_definitions: dict[str, FieldDefinition],
+        excluded_dependency_keys: set[str] | None = None,
     ) -> tuple[set[ParameterDefinition], set[DependencyContainer]]:
         """Get parameter_definitions for the construction of KwargsModel instance.
 
@@ -218,16 +219,23 @@ class KwargsModel:
             layered_parameters: A string keyed dictionary of layered parameters.
             dependencies: A string keyed dictionary mapping dependency providers.
             field_definitions: The SignatureModel fields.
+            excluded_dependency_keys: Keys of dependencies that should not be resolved by
+                this model, because they are provided by an outer scope.
 
         Returns:
             A Tuple of sets
         """
+        excluded_dependency_keys = excluded_dependency_keys or set()
         expected_dependencies = {
             cls._create_dependency_graph(key=key, dependencies=dependencies)
             for key in dependencies
-            if key in field_definitions
+            if key in field_definitions and key not in excluded_dependency_keys
         }
-        ignored_keys = {*RESERVED_KWARGS, *(dependency.key for dependency in expected_dependencies)}
+        ignored_keys = {
+            *RESERVED_KWARGS,
+            *(dependency.key for dependency in expected_dependencies),
+            *excluded_dependency_keys,
+        }
 
         param_definitions = {
             *(
@@ -275,6 +283,35 @@ class KwargsModel:
         return param_definitions, expected_dependencies
 
     @classmethod
+    def create_for_message_scope(
+        cls,
+        *,
+        signature_model: type[SignatureModel],
+        parsed_signature: ParsedSignature,
+        dependencies: dict[str, Provide],
+        excluded_dependency_keys: set[str],
+        path_parameters: set[str],
+        layered_parameters: dict[str, FieldDefinition],
+        ctx: BaseRouteHandler | HandlerContext | None = None,
+    ) -> KwargsModel:
+        """Create a kwargs model for the per-message scope of a websocket listener.
+
+        Behaves like :meth:`create_for_signature_model`, except that dependencies listed in
+        ``excluded_dependency_keys`` (the connection-scoped dependencies) are not resolved
+        per message - they are expected to already be present in the kwargs, as they are
+        resolved once for the lifetime of the connection.
+        """
+        return cls.create_for_signature_model(
+            signature_model=signature_model,
+            parsed_signature=parsed_signature,
+            dependencies=dependencies,
+            path_parameters=path_parameters,
+            layered_parameters=layered_parameters,
+            ctx=ctx,
+            excluded_dependency_keys=excluded_dependency_keys,
+        )
+
+    @classmethod
     def create_for_signature_model(  # noqa: C901
         cls,
         signature_model: type[SignatureModel],
@@ -283,6 +320,7 @@ class KwargsModel:
         path_parameters: set[str],
         layered_parameters: dict[str, FieldDefinition],
         ctx: BaseRouteHandler | HandlerContext | None = None,
+        excluded_dependency_keys: set[str] | None = None,
     ) -> KwargsModel:
         """Pre-determine what parameters are required for a given combination of route + route handler. It is executed
         during the application bootstrap process.
@@ -316,6 +354,7 @@ class KwargsModel:
             layered_parameters=layered_parameters,
             dependencies=dependencies,
             field_definitions=field_definitions,
+            excluded_dependency_keys=excluded_dependency_keys,
         )
 
         for dep_field_name in dependencies:
@@ -387,6 +426,7 @@ class KwargsModel:
                 path_parameters=path_parameters,
                 layered_parameters=layered_parameters,
                 ctx=dataclasses.replace(ctx, dependencies=[*ctx.dependencies, dependency.key]) if ctx else None,
+                excluded_dependency_keys=excluded_dependency_keys,
             )
 
             expected_path_parameters = merge_parameter_sets(
