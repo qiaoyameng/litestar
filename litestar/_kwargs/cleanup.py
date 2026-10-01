@@ -123,7 +123,7 @@ class DependencyCleanupGroup(AbstractAsyncContextManager):
                     gen.throw(exc)  # type: ignore[union-attr]
             except (StopIteration, StopAsyncIteration):
                 continue
-            except Exception as cleanup_exc:  # noqa: BLE001
+            except BaseException as cleanup_exc:  # noqa: BLE001
                 if cleanup_exc is not exc:
                     exceptions.append(cleanup_exc)
 

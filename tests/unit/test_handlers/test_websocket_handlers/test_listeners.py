@@ -1,9 +1,11 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+import threading
 from typing import Any, Optional, Union, cast
 from unittest.mock import AsyncMock, MagicMock
 
+import anyio
 import pytest
 from pytest_lazy_fixtures import lf
 
@@ -233,6 +235,104 @@ def test_listener_pass_additional_dependencies(mock: MagicMock) -> None:
         ws.send_text("something")
         ws.send_text("something")
         assert ws.receive_json() == {"data": "something", "foo": 1}
+
+
+def test_listener_message_dependencies_are_isolated_per_message() -> None:
+    active_dependencies: list[str] = []
+    cleanups: dict[str, type[BaseException]] = {}
+    slow_started = threading.Event()
+    release_slow = threading.Event()
+    fast_cleaned = threading.Event()
+
+    async def connection_dependency() -> str:
+        return "connection"
+
+    async def message_dependency(message_id: Any) -> AsyncGenerator[str, None]:
+        active_dependencies.append(message_id)
+        try:
+            yield f"db-{message_id}"
+        except BaseException as exc:
+            cleanups[message_id] = type(exc)
+            raise
+        finally:
+            active_dependencies.remove(message_id)
+            if message_id == "fast":
+                fast_cleaned.set()
+
+    @websocket_listener(
+        "/",
+        dependencies={"connection": Provide(connection_dependency)},
+        message_dependencies={"db": Provide(message_dependency)},
+        message_concurrency=2,
+    )
+    async def handler(
+        data: dict[str, Any],
+        connection: NamedDependency[str],
+        db: NamedDependency[str],
+        message_id: Any,
+    ) -> dict[str, Any]:
+        assert connection == "connection"
+        if message_id == "slow":
+            slow_started.set()
+            await anyio.to_thread.run_sync(release_slow.wait)
+            assert db == "db-slow"
+            assert "fast" not in active_dependencies
+        else:
+            assert db == "db-fast"
+            assert "slow" in active_dependencies
+            assert "fast" in active_dependencies
+            raise RuntimeError("message failed")
+        return {"db": db, "active": list(active_dependencies)}
+
+    with create_test_client([handler]) as client, client.websocket_connect("/") as ws:
+        ws.send_json({"id": "slow"})
+        slow_started.wait(1)
+        assert slow_started.is_set()
+
+        ws.send_json({"id": "fast"})
+        fast_cleaned.wait(1)
+        assert fast_cleaned.is_set()
+
+        release_slow.set()
+        assert ws.receive_json() == {"id": "slow", "db": "db-slow", "active": ["slow"]}
+
+    assert active_dependencies == []
+    assert cleanups == {"fast": RuntimeError}
+
+
+def test_listener_cancels_message_dependencies_on_disconnect() -> None:
+    message_started = threading.Event()
+    block = threading.Event()
+    cleanups: list[str] = []
+
+    async def message_dependency(message_id: Any) -> AsyncGenerator[str, None]:
+        try:
+            yield f"db-{message_id}"
+            await anyio.to_thread.run_sync(block.wait)
+        except BaseException as exc:
+            cleanups.append(type(exc).__name__)
+            raise
+
+    @websocket_listener("/", message_dependencies={"db": Provide(message_dependency)})
+    async def handler(data: dict[str, Any], db: NamedDependency[str], message_id: Any) -> None:
+        assert db == f"db-{message_id}"
+        message_started.set()
+        await anyio.to_thread.run_sync(block.wait)
+
+    with create_test_client([handler]) as client, client.websocket_connect("/") as ws:
+        ws.send_json({"id": "slow"})
+        message_started.wait(1)
+        assert message_started.is_set()
+
+    assert cleanups in (["CancelledError"], ["Cancelled"])
+
+
+def test_listener_message_concurrency_must_be_positive() -> None:
+    with pytest.raises(ImproperlyConfiguredException):
+
+        @websocket_listener("/", message_concurrency=0)
+        def handler(data: str) -> None:
+            return None
 
 
 def test_listener_callback_no_data_arg_raises() -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from inspect import Signature
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -10,7 +11,7 @@ from typing import (
 )
 
 from litestar.connection import WebSocket
-from litestar.di import NamedDependency
+from litestar.di import NamedDependency, Provide
 from litestar.exceptions import ImproperlyConfiguredException, WebSocketDisconnect
 from litestar.types import (
     AnyCallable,
@@ -59,6 +60,10 @@ class WebsocketListenerRouteHandler(WebsocketRouteHandler):
         "on_accept": "Callback invoked after a WebSocket connection has been accepted",
         "on_disconnect": "Callback invoked after a WebSocket connection has been closed",
         "_connection_lifespan": None,
+        "_message_dependencies": None,
+        "_message_concurrency": None,
+        "_message_id_key": None,
+        "_path_parameter_names": None,
         "_receive_handler": None,
         "_receive_mode": None,
         "_send_handler": None,
@@ -77,6 +82,9 @@ class WebsocketListenerRouteHandler(WebsocketRouteHandler):
         exception_handlers: dict[int | type[Exception], ExceptionHandler] | None = None,
         guards: Sequence[Guard] | None = None,
         middleware: Sequence[Middleware] | None = None,
+        message_concurrency: int = 1,
+        message_dependencies: Dependencies | None = None,
+        message_id_key: str | None = "id",
         receive_mode: WebSocketMode = "text",
         send_mode: WebSocketMode = "text",
         name: str | None = None,
@@ -102,6 +110,9 @@ class WebsocketListenerRouteHandler(WebsocketRouteHandler):
         exception_handlers: dict[int | type[Exception], ExceptionHandler] | None = None,
         guards: Sequence[Guard] | None = None,
         middleware: Sequence[Middleware] | None = None,
+        message_concurrency: int = 1,
+        message_dependencies: Dependencies | None = None,
+        message_id_key: str | None = "id",
         receive_mode: WebSocketMode = "text",
         send_mode: WebSocketMode = "text",
         name: str | None = None,
@@ -129,6 +140,9 @@ class WebsocketListenerRouteHandler(WebsocketRouteHandler):
         exception_handlers: dict[int | type[Exception], ExceptionHandler] | None = None,
         guards: Sequence[Guard] | None = None,
         middleware: Sequence[Middleware] | None = None,
+        message_concurrency: int = 1,
+        message_dependencies: Dependencies | None = None,
+        message_id_key: str | None = "id",
         receive_mode: WebSocketMode = "text",
         send_mode: WebSocketMode = "text",
         name: str | None = None,
@@ -160,6 +174,9 @@ class WebsocketListenerRouteHandler(WebsocketRouteHandler):
             exception_handlers: A mapping of status codes and/or exception types to handler functions.
             guards: A sequence of :class:`Guard <.types.Guard>` callables.
             middleware: A sequence of :class:`Middleware <.types.Middleware>`.
+            message_concurrency: Maximum number of messages from the same connection handled concurrently.
+            message_dependencies: Dependencies resolved independently for each message.
+            message_id_key: Key used to extract the message identifier and associate it with a response.
             receive_mode: Websocket mode to receive data in, either `text` or `binary`.
             send_mode: Websocket mode to receive data in, either `text` or `binary`.
             name: A string identifying the route handler.
@@ -188,17 +205,43 @@ class WebsocketListenerRouteHandler(WebsocketRouteHandler):
                 "(on_accept, on_disconnect, connection_accept_handler)",
             )
 
+        if message_concurrency < 1:
+            raise ImproperlyConfiguredException("message_concurrency must be greater than or equal to 1")
+
         self._receive_mode: WebSocketMode = receive_mode
         self._send_mode: WebSocketMode = send_mode
         self._connection_lifespan = connection_lifespan
+        self._message_concurrency = message_concurrency
+        self._message_id_key = message_id_key
         self._send_handler: Callable[[WebSocket, Any], Coroutine[None, None, None]] | EmptyType = Empty
         self._receive_handler: Callable[[WebSocket], Any] | EmptyType = Empty
+        explicit_dependencies = dict(dependencies or {})
+        self._message_dependencies = {
+            key: provider
+            for key, provider in explicit_dependencies.items()
+            if isinstance(provider, Provide) and provider.scope == "message"
+        }
+        self._message_dependencies.update(
+            {
+                key: provider if isinstance(provider, Provide) else Provide(provider, scope="message")
+                for key, provider in (message_dependencies or {}).items()
+            }
+        )
+
+        connection_dependencies = {
+            key: provider for key, provider in explicit_dependencies.items() if key not in self._message_dependencies
+        }
+
+        if duplicate_keys := set(connection_dependencies).intersection(self._message_dependencies):
+            raise ImproperlyConfiguredException(
+                f"Dependencies cannot be both connection- and message-scoped: {', '.join(sorted(duplicate_keys))}"
+            )
 
         self.connection_accept_handler = connection_accept_handler
         self.on_accept = ensure_async_callable(on_accept) if on_accept else None
         self.on_disconnect = ensure_async_callable(on_disconnect) if on_disconnect else None
 
-        listener_dependencies = dict(dependencies or {})
+        listener_dependencies = dict(connection_dependencies)
 
         listener_dependencies["connection_lifespan_dependencies"] = create_stub_dependency(
             connection_lifespan or self.default_connection_lifespan
@@ -229,6 +272,12 @@ class WebsocketListenerRouteHandler(WebsocketRouteHandler):
 
     def _get_merge_opts(self, others: tuple[Router, ...]) -> dict[str, Any]:
         merge_opts = super()._get_merge_opts(others)
+        message_dependencies = dict(self._message_dependencies)
+        for other in others:
+            message_dependencies.update(getattr(other, "_message_dependencies", {}))
+        merge_opts["dependencies"] = {
+            key: value for key, value in merge_opts["dependencies"].items() if key not in message_dependencies
+        }
         merge_opts.update(
             receive_mode=self._receive_mode,
             send_mode=self._send_mode,
@@ -236,15 +285,39 @@ class WebsocketListenerRouteHandler(WebsocketRouteHandler):
             connection_accept_handler=self.connection_accept_handler,
             on_accept=self.on_accept,
             on_disconnect=self.on_disconnect,
+            message_concurrency=self._message_concurrency,
+            message_dependencies=message_dependencies,
+            message_id_key=self._message_id_key,
         )
         return merge_opts
 
+    @property
+    def message_concurrency(self) -> int:
+        return self._message_concurrency
+
+    @property
+    def message_id_key(self) -> str | None:
+        return self._message_id_key
+
+    @property
+    def path_parameter_names(self) -> set[str]:
+        return set(getattr(self, "_path_parameter_names", set()))
+
     def on_registration(self, route: BaseRoute, app: Litestar) -> None:
+        self._path_parameter_names = set(route.path_parameters)
         self.fn = self._prepare_fn()
         super().on_registration(route, app)
+        self.dependencies.update(self._message_dependencies)
+        self._finalize_dependencies(app=app)
+        if isinstance(self.fn, ListenerHandler):
+            self.fn.initialize_message_scope()
 
     def _prepare_fn(self) -> ListenerHandler:
-        parsed_signature = ParsedSignature.from_fn(self.fn, self.signature_namespace)
+        fn_type_hints = get_fn_type_hints(self.fn, namespace=self.signature_namespace)
+        original_signature = Signature.from_callable(self.fn)
+        if "message_id" in original_signature.parameters:
+            fn_type_hints.setdefault("message_id", Any)
+        parsed_signature = ParsedSignature.from_signature(original_signature, fn_type_hints)
 
         if "data" not in parsed_signature.parameters:
             raise ImproperlyConfiguredException("Websocket listeners must accept a 'data' parameter")
@@ -258,15 +331,22 @@ class WebsocketListenerRouteHandler(WebsocketRouteHandler):
         self._parsed_return_field = parsed_signature.return_type
         self._parsed_data_field = parsed_signature.parameters.get("data")
         self._parsed_fn_signature = ParsedSignature.from_signature(
-            create_handler_signature(parsed_signature.original_signature),
+            create_handler_signature(
+                parsed_signature.original_signature,
+                message_dependency_names=set(self._message_dependencies),
+            ),
             fn_type_hints={
-                **get_fn_type_hints(self.fn, namespace=self.signature_namespace),
+                **fn_type_hints,
                 **get_fn_type_hints(ListenerHandler.__call__, namespace=self.signature_namespace),
             },
         )
 
         return ListenerHandler(
-            listener=self, fn=self.fn, parsed_signature=parsed_signature, namespace=self.signature_namespace
+            listener=self,
+            fn=self.fn,
+            parsed_signature=parsed_signature,
+            namespace=self.signature_namespace,
+            fn_type_hints=fn_type_hints,
         )
 
     def _validate_handler_function(self) -> None:
@@ -330,6 +410,12 @@ class WebsocketListener(ABC):
     """A sequence of :class:`Guard <.types.Guard>` callables."""
     middleware: list[Middleware] | None = None
     """A sequence of :class:`Middleware <.types.Middleware>`."""
+    message_concurrency: int = 1
+    """Maximum number of messages from the same connection that can be handled concurrently."""
+    message_dependencies: Dependencies | None = None
+    """Dependencies resolved independently for each received message."""
+    message_id_key: str | None = "id"
+    """Key used to extract a message identifier and associate it with a response."""
     receive_mode: WebSocketMode = "text"
     """:class:`WebSocket <.connection.WebSocket>` mode to receive data in, either ``text`` or ``binary``."""
     send_mode: WebSocketMode = "text"
@@ -372,6 +458,9 @@ class WebsocketListener(ABC):
             exception_handlers=self.exception_handlers,
             guards=self.guards,
             middleware=self.middleware,
+            message_concurrency=self.message_concurrency,
+            message_dependencies=self.message_dependencies,
+            message_id_key=self.message_id_key,
             send_mode=self.send_mode,
             receive_mode=self.receive_mode,
             name=self.name,
@@ -421,6 +510,9 @@ def websocket_listener(
     exception_handlers: dict[int | type[Exception], ExceptionHandler] | None = None,
     guards: list[Guard] | None = None,
     middleware: list[Middleware] | None = None,
+    message_concurrency: int = 1,
+    message_dependencies: Dependencies | None = None,
+    message_id_key: str | None = "id",
     receive_mode: WebSocketMode = "text",
     send_mode: WebSocketMode = "text",
     name: str | None = None,
@@ -444,6 +536,9 @@ def websocket_listener(
     exception_handlers: dict[int | type[Exception], ExceptionHandler] | None = None,
     guards: list[Guard] | None = None,
     middleware: list[Middleware] | None = None,
+    message_concurrency: int = 1,
+    message_dependencies: Dependencies | None = None,
+    message_id_key: str | None = "id",
     receive_mode: WebSocketMode = "text",
     send_mode: WebSocketMode = "text",
     name: str | None = None,
@@ -469,6 +564,9 @@ def websocket_listener(
     exception_handlers: dict[int | type[Exception], ExceptionHandler] | None = None,
     guards: list[Guard] | None = None,
     middleware: list[Middleware] | None = None,
+    message_concurrency: int = 1,
+    message_dependencies: Dependencies | None = None,
+    message_id_key: str | None = "id",
     receive_mode: WebSocketMode = "text",
     send_mode: WebSocketMode = "text",
     name: str | None = None,
@@ -531,6 +629,9 @@ def websocket_listener(
             exception_handlers=exception_handlers,
             guards=guards,
             middleware=middleware,
+            message_concurrency=message_concurrency,
+            message_dependencies=message_dependencies,
+            message_id_key=message_id_key,
             receive_mode=receive_mode,
             send_mode=send_mode,
             name=name,

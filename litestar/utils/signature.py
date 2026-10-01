@@ -196,6 +196,8 @@ class ParsedSignature:
         """
         signature = Signature.from_callable(fn)
         fn_type_hints = get_fn_type_hints(fn, namespace=signature_namespace)
+        if "message_id" in signature.parameters:
+            fn_type_hints.setdefault("message_id", Any)
         expanded_type_hints = expand_type_var_in_type_hint(fn_type_hints, signature_namespace)
 
         return cls.from_signature(signature, expanded_type_hints)

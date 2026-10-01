@@ -31,6 +31,7 @@ __all__ = (
 
 
 T = TypeVar("T")
+DependencyScope = Literal["default", "connection", "message"]
 
 
 class Dependency:
@@ -59,6 +60,7 @@ class Provide:
         "has_sync_callable",
         "has_sync_generator_dependency",
         "sync_to_thread",
+        "scope",
         "use_cache",
         "value",
     )
@@ -70,6 +72,7 @@ class Provide:
         dependency: AnyCallable | type[Any],
         use_cache: bool = False,
         sync_to_thread: bool | None = None,
+        scope: DependencyScope = "default",
     ) -> None:
         """Initialize ``Provide``
 
@@ -77,6 +80,9 @@ class Provide:
             dependency: Callable to call or class to instantiate. The result is then injected as a dependency.
             use_cache: Cache the dependency return value. Defaults to False.
             sync_to_thread: Run sync code in an async thread. Defaults to False.
+            scope: The lifecycle scope of the dependency. This is used by WebSocket
+                listeners to distinguish connection-scoped and message-scoped
+                dependencies.
         """
         if not callable(dependency):
             raise ImproperlyConfiguredException("Provider dependency must be a callable value")
@@ -115,6 +121,7 @@ class Provide:
             self.has_sync_callable = has_sync_callable
 
         self.sync_to_thread = bool(sync_to_thread)
+        self.scope = scope
         self.use_cache = use_cache
         self.value: Any = Empty
         self._parsed_fn_signature: ParsedSignature | None = None

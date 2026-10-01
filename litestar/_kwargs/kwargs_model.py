@@ -161,7 +161,9 @@ class KwargsModel:
         }
 
         extractors: list[Extractor] = [
-            reserved_kwargs_extractors[reserved_kwarg] for reserved_kwarg in self.expected_reserved_kwargs
+            extractor
+            for reserved_kwarg in self.expected_reserved_kwargs
+            if (extractor := reserved_kwargs_extractors.get(reserved_kwarg)) is not None
         ]
 
         if self.expected_header_params:

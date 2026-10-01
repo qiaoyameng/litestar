@@ -60,6 +60,9 @@ async def resolve_dependency(
         if signature_model._fields
         else {}
     )
+    if dependency.key in kwargs:
+        return
+
     value = await dependency.provide(**dependency_kwargs)
 
     if dependency.provide.has_sync_generator_dependency:
